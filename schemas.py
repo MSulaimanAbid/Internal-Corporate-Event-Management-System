@@ -26,7 +26,7 @@ Pydantic performs automatic type coercion and raises HTTP 422 Unprocessable Enti
 for any request that fails these constraints — no manual validation needed in routes.
 """
 
-from datetime import date
+from datetime import date as date_type
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -62,7 +62,7 @@ class EventBase(BaseModel):
     )
 
     # Pydantic automatically parses "2025-06-15" strings into Python date objects.
-    date: date = Field(
+    date: date_type = Field(
         ..., description="The date on which the event will take place(YYYY-MM-DD)."
     )
 
@@ -90,7 +90,7 @@ class EventCreate(EventBase):
         the base or the response schema.
     """
 
-    pass  # Inherits all fields from EventBase — no extra fields needed at creation time.
+    # Inherits all fields from EventBase — no extra fields needed at creation time.
 
 
 class EventUpdate(EventBase):
@@ -119,7 +119,7 @@ class EventUpdate(EventBase):
     description: str | None = Field(
         None, description="A detailed description of the event."
     )
-    date: date | None = Field(
+    date: date_type | None = Field(
         None, description="The date on which the event will take place(YYYY-MM-DD)."
     )
     location: str | None = Field(
@@ -198,7 +198,7 @@ class RegistrationCreate(RegistrationBase):
         without breaking the base or response schema.
     """
 
-    pass  # Inherits employee_email from RegistrationBase — no extra fields needed.
+    # Inherits employee_email from RegistrationBase — no extra fields needed.
 
 
 class RegistrationResponse(RegistrationBase):
