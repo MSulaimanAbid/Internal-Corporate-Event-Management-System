@@ -10,6 +10,9 @@ Responsibilities:
   - Enforce business rules (e.g. returning None when a record is not found so
     the route can respond with the right HTTP status code).
   - Handle partial updates by only writing fields the client actually sent.
+  - Guard registrations against: non-existent events, full capacity, and
+    duplicate sign-ups — returning sentinel strings so routes map them to the
+    correct HTTP status codes without coupling this layer to FastAPI/HTTP.
 
 Design principle:
   Services receive an open Session from the route via `Depends(get_db)` and
@@ -92,8 +95,8 @@ def create_event(db: Session, event: schemas.EventCreate):
     # `**` unpacks into the Event constructor's keyword arguments.
     db_event = models.Event(**event.model_dump())
 
-    db.add(db_event)      # Stage the new row in the session (not yet in DB).
-    db.commit()           # Flush the INSERT to PostgreSQL and commit the transaction.
+    db.add(db_event)  # Stage the new row in the session (not yet in DB).
+    db.commit()  # Flush the INSERT to PostgreSQL and commit the transaction.
     db.refresh(db_event)  # Reload the row from DB so `db_event.id` is populated.
     return db_event
 
@@ -134,7 +137,7 @@ def update_event(db: Session, event_id: int, event_update: schemas.EventUpdate):
     for key, value in update_data.items():
         setattr(db_event, key, value)
 
-    db.commit()           # Write the UPDATE statement to PostgreSQL.
+    db.commit()  # Write the UPDATE statement to PostgreSQL.
     db.refresh(db_event)  # Reload so the returned object reflects the saved state.
     return db_event
 
@@ -164,5 +167,132 @@ def delete_event(db: Session, event_id: int):
         return False
 
     db.delete(db_event)  # Mark the row for deletion; cascade removes registrations too.
-    db.commit()          # Execute the DELETE and commit the transaction.
-    return True          # Signal success to the route handler.
+    db.commit()  # Execute the DELETE and commit the transaction.
+    return True  # Signal success to the route handler.
+
+
+def create_registration(
+    db: Session, event_id: int, registration: schemas.RegistrationCreate
+):
+    """
+    Register an employee for an event, enforcing three business rules in order.
+
+    Inputs:
+        db           (Session)                   — Active SQLAlchemy session injected by FastAPI.
+        event_id     (int)                        — Primary key of the event to register for.
+        registration (schemas.RegistrationCreate) — Validated Pydantic object containing
+                                                    the employee's email address.
+
+    Outputs:
+        models.Registration — The newly created Registration ORM object (refreshed from DB)
+                              if all three rules pass.
+        None                — If the event does not exist (route should return HTTP 404).
+        "CAPACITY_REACHED"  — If the event is already at max_capacity (route returns HTTP 409).
+        "DUPLICATE"         — If the employee has already registered for this event (HTTP 409).
+
+    Why we need it:
+        A single registration attempt must satisfy three sequential guards before
+        writing to the DB.  Keeping these checks here (not in the route) means
+        the logic is testable without spinning up an HTTP server, and the route
+        stays a thin translator from service output → HTTP response.
+    """
+    # Rule 1: Check if event exists
+    # We must confirm the event is real before checking anything else.
+    db_event = get_event(db, event_id)
+    if not db_event:
+        return None  # Will trigger a 404 Not Found
+
+    # Rule 2: Check event capacity
+    # Count how many registrations already exist for this event and compare
+    # against max_capacity.  Using .count() is more efficient than loading all rows.
+    current_count = (
+        db.query(models.Registration)
+        .filter(models.Registration.event_id == event_id)
+        .count()
+    )
+    if current_count >= db_event.max_capacity:
+        return "CAPACITY_REACHED"  # Will trigger a 409 Conflict
+
+    # Rule 3: Check for duplicate registration
+    # The DB also enforces uniqueness via the `employee_event_unique` constraint,
+    # but checking here first lets us return a clear sentinel instead of catching
+    # an IntegrityError, which is harder to map to a specific error message.
+    existing_reg = (
+        db.query(models.Registration)
+        .filter(
+            models.Registration.event_id == event_id,
+            models.Registration.employee_email == registration.employee_email,
+        )
+        .first()
+    )
+    if existing_reg:
+        return "DUPLICATE"  # Will trigger a 409 Conflict
+
+    # All checks passed, create registration
+    # `model_dump()` converts the Pydantic object to a dict; we also pass event_id
+    # separately because it comes from the URL path, not the request body.
+    db_registration = models.Registration(
+        **registration.model_dump(), event_id=event_id
+    )
+    db.add(db_registration)      # Stage the INSERT in the session.
+    db.commit()                  # Persist to PostgreSQL.
+    db.refresh(db_registration)  # Reload so the returned object has its DB-assigned id.
+    return db_registration
+
+
+def get_event_registrations(db: Session, event_id: int):
+    """
+    Retrieve all registrations for a specific event.
+
+    Inputs:
+        db       (Session) — Active SQLAlchemy session injected by FastAPI.
+        event_id (int)     — Primary key of the event whose registrations to fetch.
+
+    Outputs:
+        list[models.Registration] — All Registration rows linked to this event;
+                                    empty list if nobody has registered yet.
+
+    Why we need it:
+        Powers the GET /events/{id}/registrations endpoint so admins can see
+        a full attendee list for any event.  The caller (route) is responsible
+        for verifying the event exists before calling this function.
+    """
+    # Filter registrations by event_id; `.all()` returns a list (never None).
+    return (
+        db.query(models.Registration)
+        .filter(models.Registration.event_id == event_id)
+        .all()
+    )
+
+
+def delete_registration(db: Session, registration_id: int):
+    """
+    Cancel (delete) a single registration by its primary key.
+
+    Inputs:
+        db              (Session) — Active SQLAlchemy session injected by FastAPI.
+        registration_id (int)     — Primary key of the registration row to remove.
+
+    Outputs:
+        bool — True if the registration was found and deleted successfully;
+               False if no registration with that id exists (route returns HTTP 404).
+
+    Why we need it:
+        Powers the DELETE /registrations/{id} endpoint, allowing an employee or
+        admin to cancel a specific registration without affecting the parent event
+        or other registrations for the same event.
+    """
+    # Look up the registration by its own id (not event_id) so the caller
+    # can cancel any registration they know the id of, regardless of event.
+    db_registration = (
+        db.query(models.Registration)
+        .filter(models.Registration.id == registration_id)
+        .first()   # Returns None if no matching row — avoids raising an exception.
+    )
+    if not db_registration:
+        # Signal to the route that the id was invalid — route returns 404.
+        return False
+
+    db.delete(db_registration)  # Mark the row for deletion in the session.
+    db.commit()                 # Execute the DELETE and commit the transaction.
+    return True                 # Signal success to the route handler.
