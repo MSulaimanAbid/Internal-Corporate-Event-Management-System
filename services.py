@@ -37,17 +37,44 @@ def get_events(
     title: str | None = None,
     event_date: date_type | None = None,
 ):
-    # Start with a base query
+    """
+    Retrieve a filtered, paginated list of events.
+
+    Inputs:
+        db         (Session)        — Active SQLAlchemy session injected by FastAPI.
+        skip       (int)            — Number of rows to skip for offset-based pagination.
+                                      Defaults to 0 (start from the first row).
+        limit      (int)            — Maximum number of rows to return per page.
+                                      Defaults to 10 to keep response sizes small.
+        title      (str | None)     — Optional case-insensitive partial title filter.
+                                      e.g. "py" matches "Python Summit" and "PyCon".
+                                      If None, no title filter is applied.
+        event_date (date | None)    — Optional exact date filter (YYYY-MM-DD).
+                                      If None, no date filter is applied.
+
+    Outputs:
+        list[models.Event] — Events matching the given filters for the requested page;
+                             empty list if no events match.
+
+    Why we need it:
+        Allows both browsing (no filters, paginated) and searching (filter by title
+        and/or date) in a single function.  Building the query conditionally avoids
+        writing duplicate query paths for filtered vs. unfiltered scenarios.
+    """
+    # Start with a base query — filters and pagination are added below as needed.
     query = db.query(models.Event)
 
     # Apply filters if provided
     if title:
         # ilike allows for case-insensitive partial matching (e.g., searching "py" finds "Python")
+        # The % wildcards match any characters before and after the search term.
         query = query.filter(models.Event.title.ilike(f"%{title}%"))
     if event_date:
+        # Exact date match — only events on this specific calendar day are returned.
         query = query.filter(models.Event.date == event_date)
 
     # Apply pagination and execute
+    # offset(skip) skips the first N rows; limit(limit) caps the result count.
     return query.offset(skip).limit(limit).all()
 
 

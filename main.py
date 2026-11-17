@@ -78,7 +78,7 @@ def create_event(event: schemas.EventCreate, db: Session = Depends(get_db)):
     return services.create_event(db=db, event=event)
 
 
-from datetime import date as date_type
+from datetime import date as date_type  # Needed for the `date` query parameter type in read_events.
 
 
 @app.get("/events", response_model=list[schemas.EventResponse])
@@ -89,6 +89,32 @@ def read_events(
     date: date_type | None = None,
     db: Session = Depends(get_db),
 ):
+    """
+    Retrieve a filtered, paginated list of all events.
+
+    Inputs:
+        skip  (int, query)        — Number of records to skip; default 0.
+                                    Used with `limit` for page-based navigation.
+        limit (int, query)        — Max records to return per page; default 10.
+        title (str | None, query) — Optional case-insensitive partial title search.
+                                    e.g. ?title=py returns "Python Summit", "PyCon", etc.
+                                    Omit (or leave blank) to skip this filter.
+        date  (date | None, query)— Optional exact date filter in YYYY-MM-DD format.
+                                    e.g. ?date=2025-06-15 returns only events on that day.
+                                    Omit to skip this filter.
+        db    (Session)           — DB session injected by FastAPI via Depends(get_db).
+
+    Outputs:
+        list[EventResponse] (HTTP 200) — Array of matching event objects for the page;
+                                         empty array if no events match the filters.
+
+    Why we need it:
+        Supports both simple browsing (no filters) and targeted searching (by title
+        and/or date) from the same endpoint.  Front-ends can combine skip/limit with
+        the optional filters to implement paginated search results.
+    """
+    # Pass all query params straight through to the service; it builds the
+    # filtered query conditionally — None values mean "no filter applied".
     return services.get_events(db, skip=skip, limit=limit, title=title, event_date=date)
 
 
