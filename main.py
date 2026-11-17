@@ -29,15 +29,14 @@ To run the app locally:
 Interactive docs are available at http://127.0.0.1:8000/docs
 """
 
-from fastapi import Depends, FastAPI, HTTPException, status
-from sqlalchemy.orm import Session
-
 # Local modules — order matters for circular-import avoidance:
 # models must be imported before create_all so SQLAlchemy knows all table definitions.
 import models
 import schemas
 import services
 from db import engine, get_db
+from fastapi import Depends, FastAPI, HTTPException, status
+from sqlalchemy.orm import Session
 
 # Bootstrap the DB schema: issues CREATE TABLE IF NOT EXISTS for every model
 # that inherits from `base`.  Safe to run on every startup — existing tables
@@ -79,25 +78,18 @@ def create_event(event: schemas.EventCreate, db: Session = Depends(get_db)):
     return services.create_event(db=db, event=event)
 
 
+from datetime import date as date_type
+
+
 @app.get("/events", response_model=list[schemas.EventResponse])
-def read_events(skip: int = 0, limit: int = 10, db: Session = Depends(get_db)):
-    """
-    Retrieve a paginated list of all events.
-
-    Inputs:
-        skip  (int, query) — Number of records to skip; default 0.
-        limit (int, query) — Max records to return; default 10.
-        db    (Session)    — DB session injected by FastAPI via Depends(get_db).
-
-    Outputs:
-        list[EventResponse] (HTTP 200) — Array of event objects for the requested page;
-                                         empty array if no events exist.
-
-    Why we need it:
-        Lets employees browse all upcoming events before deciding which to join.
-        `skip`/`limit` allow front-end pagination without loading the full table.
-    """
-    return services.get_events(db, skip=skip, limit=limit)
+def read_events(
+    skip: int = 0,
+    limit: int = 10,
+    title: str | None = None,
+    date: date_type | None = None,
+    db: Session = Depends(get_db),
+):
+    return services.get_events(db, skip=skip, limit=limit, title=title, event_date=date)
 
 
 @app.get("/events/{id}", response_model=schemas.EventResponse)

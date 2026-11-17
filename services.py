@@ -20,35 +20,35 @@ Design principle:
   They never open their own sessions — that keeps transaction control clear.
 """
 
-from sqlalchemy.orm import Session
+from datetime import date as date_type
 
 # `models` gives us the SQLAlchemy ORM classes (Event, Registration).
 import models
 
 # `schemas` gives us the Pydantic types used for input validation.
 import schemas
+from sqlalchemy.orm import Session
 
 
-def get_events(db: Session, skip: int = 0, limit: int = 100):
-    """
-    Retrieve a paginated list of all events.
+def get_events(
+    db: Session,
+    skip: int = 0,
+    limit: int = 10,
+    title: str | None = None,
+    event_date: date_type | None = None,
+):
+    # Start with a base query
+    query = db.query(models.Event)
 
-    Inputs:
-        db   (Session) — Active SQLAlchemy session injected by FastAPI.
-        skip (int)     — Number of rows to skip; used for offset-based pagination.
-                         Defaults to 0 (start from the first row).
-        limit (int)    — Maximum number of rows to return.
-                         Defaults to 100 to prevent accidentally fetching the whole table.
+    # Apply filters if provided
+    if title:
+        # ilike allows for case-insensitive partial matching (e.g., searching "py" finds "Python")
+        query = query.filter(models.Event.title.ilike(f"%{title}%"))
+    if event_date:
+        query = query.filter(models.Event.date == event_date)
 
-    Outputs:
-        list[models.Event] — All Event ORM objects in the requested page;
-                             empty list if no events exist yet.
-
-    Why we need it:
-        Powers the GET /events endpoint; pagination keeps response sizes
-        manageable as the event count grows.
-    """
-    return db.query(models.Event).offset(skip).limit(limit).all()
+    # Apply pagination and execute
+    return query.offset(skip).limit(limit).all()
 
 
 def get_event(db: Session, event_id: int):
