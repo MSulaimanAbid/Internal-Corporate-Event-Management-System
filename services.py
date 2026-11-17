@@ -20,35 +20,62 @@ Design principle:
   They never open their own sessions — that keeps transaction control clear.
 """
 
-from sqlalchemy.orm import Session
+from datetime import date as date_type
 
 # `models` gives us the SQLAlchemy ORM classes (Event, Registration).
 import models
 
 # `schemas` gives us the Pydantic types used for input validation.
 import schemas
+from sqlalchemy.orm import Session
 
 
-def get_events(db: Session, skip: int = 0, limit: int = 100):
+def get_events(
+    db: Session,
+    skip: int = 0,
+    limit: int = 10,
+    title: str | None = None,
+    event_date: date_type | None = None,
+):
     """
-    Retrieve a paginated list of all events.
+    Retrieve a filtered, paginated list of events.
 
     Inputs:
-        db   (Session) — Active SQLAlchemy session injected by FastAPI.
-        skip (int)     — Number of rows to skip; used for offset-based pagination.
-                         Defaults to 0 (start from the first row).
-        limit (int)    — Maximum number of rows to return.
-                         Defaults to 100 to prevent accidentally fetching the whole table.
+        db         (Session)        — Active SQLAlchemy session injected by FastAPI.
+        skip       (int)            — Number of rows to skip for offset-based pagination.
+                                      Defaults to 0 (start from the first row).
+        limit      (int)            — Maximum number of rows to return per page.
+                                      Defaults to 10 to keep response sizes small.
+        title      (str | None)     — Optional case-insensitive partial title filter.
+                                      e.g. "py" matches "Python Summit" and "PyCon".
+                                      If None, no title filter is applied.
+        event_date (date | None)    — Optional exact date filter (YYYY-MM-DD).
+                                      If None, no date filter is applied.
 
     Outputs:
-        list[models.Event] — All Event ORM objects in the requested page;
-                             empty list if no events exist yet.
+        list[models.Event] — Events matching the given filters for the requested page;
+                             empty list if no events match.
 
     Why we need it:
-        Powers the GET /events endpoint; pagination keeps response sizes
-        manageable as the event count grows.
+        Allows both browsing (no filters, paginated) and searching (filter by title
+        and/or date) in a single function.  Building the query conditionally avoids
+        writing duplicate query paths for filtered vs. unfiltered scenarios.
     """
-    return db.query(models.Event).offset(skip).limit(limit).all()
+    # Start with a base query — filters and pagination are added below as needed.
+    query = db.query(models.Event)
+
+    # Apply filters if provided
+    if title:
+        # ilike allows for case-insensitive partial matching (e.g., searching "py" finds "Python")
+        # The % wildcards match any characters before and after the search term.
+        query = query.filter(models.Event.title.ilike(f"%{title}%"))
+    if event_date:
+        # Exact date match — only events on this specific calendar day are returned.
+        query = query.filter(models.Event.date == event_date)
+
+    # Apply pagination and execute
+    # offset(skip) skips the first N rows; limit(limit) caps the result count.
+    return query.offset(skip).limit(limit).all()
 
 
 def get_event(db: Session, event_id: int):
